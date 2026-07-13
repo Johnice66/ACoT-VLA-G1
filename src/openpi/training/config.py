@@ -23,6 +23,7 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.agilex_policy as agilex_policy
+import openpi.policies.g01_policy as g01_policy
 import openpi.policies.go1_policy as go1_policy
 import openpi.policies.go2_policy as go2_policy
 import openpi.policies.vlabench_policy as vlabench_policy
@@ -496,7 +497,7 @@ class LeRobotACOTVLABenchDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
         )
-        object.__setattr__(ret_config, 'joint_action_shifts', self.joint_action_shifts)
+        object.__setattr__(ret_config, "joint_action_shifts", self.joint_action_shifts)
         return ret_config
 
 
@@ -569,6 +570,74 @@ class LerobotACOTGo1DataConfig(DataConfigFactory):
         model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
 
         ret_config =  dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=self.repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+        )
+        object.__setattr__(ret_config, 'joint_action_shifts', self.joint_action_shifts)
+        return ret_config
+
+
+@dataclasses.dataclass(frozen=True)
+class LerobotACOTG01DataConfig(DataConfigFactory):
+    """Configuration for AgiBot G01 datasets and real-robot inference."""
+
+    extra_delta_transform: Sequence[bool] = (True, True)
+    joint_action_shifts: Sequence[int] = (1, 1)
+
+    # If provided, will be injected into the input data if the "prompt" key is not present.
+    default_prompt: str | None = "Fixed-point Non-generalized Door Opening"
+
+    repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
+        default=_transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "top_head": "observation.images.top_head",
+                            "hand_left": "observation.images.hand_left",
+                            "hand_right": "observation.images.hand_right",
+                        },
+                        "state": "observation.state",
+                        "actions": "action",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+    )
+
+    action_sequence_keys: Sequence[str] = ("action",)
+
+    delta_action_mask: Sequence[bool] = dataclasses.field(
+        default_factory=lambda: _transforms.make_bool_mask(14, -18)
+    )
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[
+                g01_policy.G01ACOTInputs(
+                    action_dim=model_config.action_dim,
+                    acot_action_generation=(
+                        (model_config.coarse_action_horizon, model_config.action_horizon),
+                        self.joint_action_shifts,
+                    ),
+                )
+            ],
+            outputs=[g01_policy.G01ACOTOutputs()],
+        )
+
+        data_transforms = data_transforms.push(
+            inputs=[_transforms.ACOTDeltaActions(self.delta_action_mask, self.extra_delta_transform)],
+            outputs=[_transforms.ACOTAbsoluteActions(self.delta_action_mask, self.extra_delta_transform)],
+        )
+
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+
+        ret_config = dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=self.repack_transforms,
             data_transforms=data_transforms,
@@ -1671,6 +1740,50 @@ _CONFIGS = [
         num_workers=48 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         batch_size=128 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=acot_vla.ACOTConfig().get_freeze_filter(freeze_vision = False, freeze_llm = True, freeze_dual_ae=[False, False]),
+    ),
+    # agibot g01 configs
+    TrainConfig(
+        name="acot_g01_task_5093",
+        model=acot_vla.ACOTConfig(
+            action_dim=32,
+            coarse_action_horizon=16,
+            action_horizon=16,
+            pi05=True,
+            discrete_state_input=True,
+            action_expert_variant="gemma_300m",
+            adopt_explicit_action_reasoner=True,
+            adopt_implicit_action_reasoner=True,
+            downsample_based_implicit_extractor=True,
+        ),
+        data=LerobotACOTG01DataConfig(
+            repo_id=os.getenv(
+                "G01_TASK_5093_DATASET",
+                "/Users/johnice/Desktop/nw/Isaac-GR00T/datasets/task_5093",
+            ),
+            assets=AssetsConfig(asset_id=os.getenv("G01_TASK_5093_ASSET_ID", "g01/task_5093")),
+            default_prompt="Fixed-point Non-generalized Door Opening",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=(True, True),
+            joint_action_shifts=(1, 1),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=50_000,
+        save_interval=5000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
+        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
+        batch_size=128 if not os.getenv("DEBUG_MODE", default=False) == "true" else 16,
+        policy_metadata={
+            "robot_type": "g01",
+            "action_horizon": 16,
+            "action_dim": 16,
+            "prompt": "Fixed-point Non-generalized Door Opening",
+        },
     ),
     # go1 configs
     TrainConfig(

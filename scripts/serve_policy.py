@@ -1,6 +1,7 @@
 import dataclasses
 import enum
 import logging
+import os
 import socket
 
 import tyro
@@ -21,6 +22,7 @@ class EnvMode(enum.Enum):
     VLABENCH = "vlabench"
     LIBEROPLUS = "liberoplus"
     G2SIM = "g2sim"
+    G01 = "g01"
 
 
 @dataclasses.dataclass
@@ -93,6 +95,21 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 
 def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) -> _policy.Policy:
     """Create a default policy for the given environment."""
+    if env is EnvMode.G01:
+        checkpoint_dir = os.getenv("G01_CHECKPOINT_DIR")
+        if not checkpoint_dir:
+            raise ValueError(
+                "G01 env mode requires G01_CHECKPOINT_DIR to point at the trained checkpoint step directory. "
+                "Example: G01_CHECKPOINT_DIR=/path/to/checkpoints/acot_g01_task_5093/exp_name/50000 "
+                "bash scripts/server.sh 0 5555 G01"
+            )
+        config_name = os.getenv("G01_POLICY_CONFIG", "acot_g01_task_5093")
+        return _policy_config.create_trained_policy(
+            _config.get_config(config_name),
+            checkpoint_dir,
+            default_prompt=default_prompt or "Fixed-point Non-generalized Door Opening",
+        )
+
     if checkpoint := DEFAULT_CHECKPOINT.get(env):
         return _policy_config.create_trained_policy(
             _config.get_config(checkpoint.config), checkpoint.dir, default_prompt=default_prompt
