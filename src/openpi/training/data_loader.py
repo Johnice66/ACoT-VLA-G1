@@ -1,6 +1,7 @@
 from collections.abc import Iterator, Sequence
 import multiprocessing
 import os
+import pathlib
 import typing
 from typing import Protocol, SupportsIndex, TypeVar
 
@@ -46,6 +47,52 @@ class SafeDataset(Dataset):
         if name == 'dataset':
             raise AttributeError(f"'{type(self).__name__}' object has no attribute 'dataset'")
         
+        return getattr(self.dataset, name)
+
+
+class TaskIndexFilteredDataset(Dataset):
+    """View of a LeRobot dataset restricted to selected raw task_index values."""
+
+    def __init__(self, dataset: Dataset, task_indexes: Sequence[int]):
+        self.dataset = dataset
+        self.task_indexes = tuple(int(index) for index in task_indexes)
+        if not self.task_indexes:
+            raise ValueError("task_indexes must not be empty.")
+        task_index_set = set(self.task_indexes)
+        self._indices = self._build_indices(task_index_set)
+        if not self._indices:
+            raise ValueError(f"No dataset rows matched task_indexes={self.task_indexes}.")
+        print(
+            f"Filtered dataset to task_indexes={self.task_indexes}: "
+            f"{len(self._indices)} / {len(dataset)} rows."
+        )
+
+    def _build_indices(self, task_index_set: set[int]) -> list[int]:
+        hf_dataset = getattr(self.dataset, "hf_dataset", None)
+        if hf_dataset is not None and "task_index" in getattr(hf_dataset, "column_names", ()):
+            task_indexes = hf_dataset["task_index"]
+            return [idx for idx, task_index in enumerate(task_indexes) if int(task_index) in task_index_set]
+
+        indices: list[int] = []
+        for idx in range(len(self.dataset)):
+            item = self.dataset[idx]
+            if "task_index" not in item:
+                raise KeyError(
+                    "Cannot filter dataset by task_index because samples do not contain a 'task_index' key."
+                )
+            if int(np.asarray(item["task_index"]).item()) in task_index_set:
+                indices.append(idx)
+        return indices
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, index: SupportsIndex):
+        return self.dataset[self._indices[index.__index__()]]
+
+    def __getattr__(self, name):
+        if name == "dataset":
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute 'dataset'")
         return getattr(self.dataset, name)
 
 
@@ -96,6 +143,11 @@ class TransformedDataset(Dataset[T_co]):
             for item in self._dataset._datasets:
                 length += len(item)
         return length
+
+    def __getattr__(self, name):
+        if name == "_dataset":
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '_dataset'")
+        return getattr(self._dataset, name)
 
 
 class IterableTransformedDataset(IterableDataset[T_co]):
@@ -163,6 +215,20 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+def _local_lerobot_root(repo_id: str) -> pathlib.Path | None:
+    path = pathlib.Path(repo_id).expanduser()
+    if (path / "meta" / "info.json").exists():
+        return path.resolve()
+    return None
+
+
+def _lerobot_repo_args(repo_id: str) -> tuple[str, pathlib.Path | None]:
+    local_root = _local_lerobot_root(repo_id)
+    if local_root is None:
+        return repo_id, None
+    return local_root.name, local_root
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig, model_config: _model.BaseModelConfig
 ) -> Dataset:
@@ -184,11 +250,17 @@ def create_torch_dataset(
 
     if isinstance(repo_id, list):
         # If repo_id is a list, create a dataset for each repo_id and concatenate them.
+        resolved_repos = [_lerobot_repo_args(r) for r in repo_id]
+        if any(root is not None for _, root in resolved_repos) and not all(root is not None for _, root in resolved_repos):
+            raise ValueError("Mixing local LeRobot paths and Hugging Face repo IDs in one repo_id list is not supported.")
+        local_root = resolved_repos[0][1] if resolved_repos else None
+        resolved_repo_ids = [repo for repo, _ in resolved_repos]
         dataset_metas = [
-            lerobot_dataset.LeRobotDatasetMetadata(r) for r in repo_id
+            lerobot_dataset.LeRobotDatasetMetadata(r, root=local_root) for r in resolved_repo_ids
         ]
         dataset = lerobot_dataset.MultiLeRobotDataset(
-            repo_id,
+            resolved_repo_ids,
+            root=local_root,
             delta_timestamps={
                 key: [t / dataset_meta.fps for t in range(action_chunk_size)]
                 for dataset_meta in dataset_metas
@@ -209,9 +281,11 @@ def create_torch_dataset(
             print(f"Dataset {i} has {len(d)} frames.")
 
     else:
-        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+        resolved_repo_id, local_root = _lerobot_repo_args(repo_id)
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(resolved_repo_id, root=local_root)
         dataset = lerobot_dataset.LeRobotDataset(
-            data_config.repo_id,
+            resolved_repo_id,
+            root=local_root,
             delta_timestamps={
                 key: [t / dataset_meta.fps for t in range(action_chunk_size)]
                 for key in data_config.action_sequence_keys
@@ -222,6 +296,9 @@ def create_torch_dataset(
             dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
         if data_config.prompt_from_hl_instruction:
             dataset = TransformedDataset(dataset, [_transforms.PromptFromHighlevelInstruction(dataset_meta.info['instruction_segments'])])
+
+    if data_config.task_indexes is not None:
+        dataset = TaskIndexFilteredDataset(dataset, data_config.task_indexes)
 
     return dataset
 

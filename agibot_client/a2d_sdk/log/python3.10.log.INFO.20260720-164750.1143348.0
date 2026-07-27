@@ -1,0 +1,11 @@
+Log file created at: 2026/07/20 16:47:50
+Running on machine: nw102
+Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+I0720 16:47:50.891541 1143348 dylog_impl.cpp:607] [DYLOG] set dylog default level from env = FATAL
+W0720 16:47:50.891554 1143348 dylog_impl.cpp:617] [DYLOG] can't find available soc record file with path : /proc/device-tree/model, use s1
+I0720 16:47:50.891556 1143348 dylog_impl.cpp:626] [DYLOG] soc num : s1
+I0720 16:47:50.891558 1143348 dylog_impl.cpp:631] [DYLOG] can't read scene_mode, use sud
+W0720 16:47:50.891682 1143348 dylog_impl.cpp:693] [DYLOG] can't find available json config file with path : /home/agi/app/conf/scene_server/dylog_sud_default.json, use default.
+I0720 16:47:50.891708 1143348 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/python3.10/cosine_internal
+I0720 16:48:01.109591 1143348 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/python3.10/aorta
+I0720 16:48:01.115594 1143348 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/python3.10/agibotdds_logs

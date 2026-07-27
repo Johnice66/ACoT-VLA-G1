@@ -1,0 +1,25 @@
+Log file created at: 2026/06/23 10:20:25
+Running on machine: nw102
+Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+I0623 10:20:25.980808  7864 dylog_impl.cpp:607] [DYLOG] set dylog default level from env = FATAL
+W0623 10:20:25.980832  7864 dylog_impl.cpp:617] [DYLOG] can't find available soc record file with path : /proc/device-tree/model, use s1
+I0623 10:20:25.980834  7864 dylog_impl.cpp:626] [DYLOG] soc num : s1
+I0623 10:20:25.980835  7864 dylog_impl.cpp:631] [DYLOG] can't read scene_mode, use sud
+W0623 10:20:25.980839  7864 dylog_impl.cpp:693] [DYLOG] can't find available json config file with path : /home/agi/app/conf/scene_server/dylog_sud_default.json, use default.
+I0623 10:20:25.980865  7864 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/cosine_internal
+I0623 10:20:25.987288  7864 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/aorta
+I0623 10:20:26.005183  7864 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/forwarder
+I0623 10:25:25.981094  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 10:25:25.984674  7867 dylog_impl.cpp:251] [DYLOG] register dsd_name : dyblog/log_frequency
+I0623 10:30:25.984902  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 10:35:25.985060  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 10:40:25.985277  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 10:45:25.985435  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 10:50:25.985599  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 10:55:25.985759  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 11:00:25.985910  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 11:05:25.986038  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 11:10:25.986290  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 11:15:25.986506  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 11:20:25.986639  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 11:25:25.986748  7867 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 

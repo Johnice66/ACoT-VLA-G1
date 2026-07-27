@@ -3,11 +3,10 @@ import dataclasses
 import logging
 import math
 import pathlib
+import csv
+from typing import Literal, Optional
 
 import imageio
-from libero.libero import benchmark
-from libero.libero import get_libero_path
-from libero.libero.envs import OffScreenRenderEnv
 import numpy as np
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy as _websocket_client_policy
@@ -22,6 +21,20 @@ LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 import matplotlib.pyplot as plt
 import os
 
+try:
+    from libero.libero import benchmark
+    from libero.libero import get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv
+except ModuleNotFoundError as exc:
+    if exc.name != "libero":
+        raise
+    raise ModuleNotFoundError(
+        "LIBERO is not installed in this Python environment. Follow examples/libero/README.md: "
+        "create examples/libero/.venv, install examples/libero/requirements.txt and "
+        "third_party/libero/requirements.txt, install -e third_party/libero, then run with "
+        "PYTHONPATH=$PWD/third_party/libero."
+    ) from exc
+
 
 @dataclasses.dataclass
 class Args:
@@ -30,8 +43,11 @@ class Args:
     #################################################################################################################
     host: str = "0.0.0.0"
     port: int = 8000
+    server_wait_timeout_s: float = 120.0
     resize_size: int = 224
     replan_steps: int = 5
+    server_input_mode: Literal["libero", "go2"] = "libero"
+    action_dim: int = 7
 
     #################################################################################################################
     # LIBERO environment-specific parameters
@@ -41,13 +57,17 @@ class Args:
     )
     exp_name: str = ("debug")
     resume_id: int = 0
+    task_start: int = 0
+    task_count: Optional[int] = None
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
+    max_steps: Optional[int] = None
     num_trials_per_task: int = 50  # Number of rollouts per task
 
     #################################################################################################################
     # Utils
     #################################################################################################################
     video_out_path: str = "./libero_videos"  # Path to save videos
+    action_log_path: Optional[str] = None  # Optional CSV path for debugging predicted action chunks
     seed: int = 7  # Random Seed (for reproducibility)
 
 
@@ -73,6 +93,8 @@ def eval_libero(args: Args) -> None:
         max_steps = 400 * 3
     else:
         raise ValueError(f"Unknown task suite: {args.task_suite_name}")
+    if args.max_steps is not None:
+        max_steps = args.max_steps
     video_out_path = args.video_out_path
     video_out_path_per_task = pathlib.Path(video_out_path) / args.exp_name / args.task_suite_name
     video_out_path_per_task_success = video_out_path_per_task / "success"
@@ -80,12 +102,45 @@ def eval_libero(args: Args) -> None:
 
     pathlib.Path(video_out_path_per_task_success).mkdir(parents=True, exist_ok=True)
     pathlib.Path(video_out_path_per_task_failure).mkdir(parents=True, exist_ok=True)
+    action_log_file = None
+    action_log_writer = None
+    if args.action_log_path is not None:
+        action_log_path = pathlib.Path(args.action_log_path)
+        action_log_path.parent.mkdir(parents=True, exist_ok=True)
+        action_log_file = action_log_path.open("w", newline="")
+        action_log_writer = csv.DictWriter(
+            action_log_file,
+            fieldnames=[
+                "task_id",
+                "episode_idx",
+                "t",
+                "eef_x",
+                "eef_y",
+                "eef_z",
+                "state_gripper",
+                "chunk_len",
+                "exec_gripper_min",
+                "exec_gripper_max",
+                "exec_gripper_mean",
+                "exec_gripper_first",
+                "exec_gripper_values",
+                "first_action",
+            ],
+        )
+        action_log_writer.writeheader()
 
-    client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
+    client = _websocket_client_policy.WebsocketClientPolicy(
+        args.host,
+        args.port,
+        wait_timeout_s=args.server_wait_timeout_s,
+        retry_interval_s=1.0,
+    )
+    logging.info(f"Policy server metadata: {client.get_server_metadata()}")
 
     # Start evaluation
     total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
+    task_stop = num_tasks_in_suite if args.task_count is None else min(num_tasks_in_suite, args.task_start + args.task_count)
+    for task_id in tqdm.tqdm(range(args.task_start, task_stop)):
         # Get task
         task = task_suite.get_task(task_id)
 
@@ -145,26 +200,50 @@ def eval_libero(args: Args) -> None:
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
                         # Prepare observations dict
-                        element = {
-                            "observation/image": img,
-                            "observation/wrist_image": wrist_img,
-                            "observation/state": np.concatenate(
-                                (
-                                    obs["robot0_eef_pos"],
-                                    _quat2axisangle(obs["robot0_eef_quat"]),
-                                    obs["robot0_gripper_qpos"],
-                                )
-                            ),
-                            "prompt": str(task_description),
-                        }
+                        state = np.concatenate(
+                            (
+                                obs["robot0_eef_pos"],
+                                _quat2axisangle(obs["robot0_eef_quat"]),
+                                obs["robot0_gripper_qpos"],
+                            )
+                        )
+                        element = _make_policy_observation(
+                            img,
+                            wrist_img,
+                            state,
+                            str(task_description),
+                            input_mode=args.server_input_mode,
+                        )
 
                         # Query model to get action
                         ret_result = client.infer(element)
-                        action_chunk = ret_result["actions"]
+                        action_chunk = np.asarray(ret_result["actions"])[..., : args.action_dim]
 
                         assert (
                             len(action_chunk) >= args.replan_steps
                         ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        if action_log_writer is not None:
+                            exec_chunk = action_chunk[: args.replan_steps]
+                            gripper = exec_chunk[:, -1]
+                            action_log_writer.writerow(
+                                {
+                                    "task_id": task_id,
+                                    "episode_idx": episode_idx,
+                                    "t": t,
+                                    "eef_x": state[0],
+                                    "eef_y": state[1],
+                                    "eef_z": state[2],
+                                    "state_gripper": state[-1],
+                                    "chunk_len": len(action_chunk),
+                                    "exec_gripper_min": float(np.min(gripper)),
+                                    "exec_gripper_max": float(np.max(gripper)),
+                                    "exec_gripper_mean": float(np.mean(gripper)),
+                                    "exec_gripper_first": float(gripper[0]),
+                                    "exec_gripper_values": " ".join(f"{x:.6g}" for x in gripper),
+                                    "first_action": " ".join(f"{x:.6g}" for x in exec_chunk[0]),
+                                }
+                            )
+                            action_log_file.flush()
                         action_plan.extend(action_chunk[: args.replan_steps])
 
                     action = action_plan.popleft()
@@ -211,6 +290,8 @@ def eval_libero(args: Args) -> None:
 
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")
+    if action_log_file is not None:
+        action_log_file.close()
 
 
 def _get_libero_env(task, resolution, seed):
@@ -221,6 +302,34 @@ def _get_libero_env(task, resolution, seed):
     env = OffScreenRenderEnv(**env_args)
     env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
+
+
+def _make_policy_observation(
+    image: np.ndarray,
+    wrist_image: np.ndarray,
+    state: np.ndarray,
+    prompt: str,
+    *,
+    input_mode: str,
+) -> dict:
+    if input_mode == "libero":
+        return {
+            "observation/image": image,
+            "observation/wrist_image": wrist_image,
+            "observation/state": state,
+            "prompt": prompt,
+        }
+    if input_mode == "go2":
+        return {
+            "images": {
+                "top_head": image,
+                "hand_left": wrist_image,
+                "hand_right": np.zeros_like(image),
+            },
+            "state": state,
+            "prompt": prompt,
+        }
+    raise ValueError(f"Unsupported server_input_mode: {input_mode}")
 
 
 def _quat2axisangle(quat):

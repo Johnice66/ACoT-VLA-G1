@@ -5,10 +5,12 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import dataclasses
+import pathlib
+
 import numpy as np
 import tqdm
 import tyro
-import random
 import openpi.models.model as _model
 import openpi.shared.normalize as normalize
 import openpi.training.config as _config
@@ -26,6 +28,10 @@ def create_torch_dataloader(
     batch_size: int,
     model_config: _model.BaseModelConfig,
     max_frames: int | None = None,
+    num_workers: int = 8,
+    sample_ratio: float = 1.0,
+    shuffle: bool = False,
+    seed: int = 0,
 ) -> tuple[_data_loader.Dataset, int]:
     if data_config.repo_id is None:
         raise ValueError("Data config must have a repo_id")
@@ -43,17 +49,17 @@ def create_torch_dataloader(
     # dataset = _data_loader.SafeDataset(dataset)
     if max_frames is not None and max_frames < len(dataset):
         num_batches = max_frames // batch_size
-        shuffle = True
     else:
         num_batches = len(dataset) // batch_size
-        shuffle = False
+    num_batches = max(1, int(num_batches * sample_ratio))
     
     data_loader = _data_loader.TorchDataLoader(
         dataset,
         local_batch_size=batch_size,
-        num_workers=8,
-        shuffle=True,
+        num_workers=num_workers,
+        shuffle=shuffle,
         num_batches=num_batches,
+        seed=seed,
     )
     return data_loader, num_batches
 
@@ -63,6 +69,7 @@ def create_rlds_dataloader(
     action_horizon: int,
     batch_size: int,
     max_frames: int | None = None,
+    sample_ratio: float = 1.0,
 ) -> tuple[_data_loader.Dataset, int]:
     dataset = _data_loader.create_rlds_dataset(data_config, action_horizon, batch_size, shuffle=False)
     dataset = _data_loader.IterableTransformedDataset(
@@ -79,6 +86,7 @@ def create_rlds_dataloader(
         num_batches = max_frames // batch_size
     else:
         num_batches = len(dataset) // batch_size
+    num_batches = max(1, int(num_batches * sample_ratio))
     data_loader = _data_loader.RLDSDataLoader(
         dataset,
         num_batches=num_batches,
@@ -86,29 +94,58 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
-def main(config_name: str, max_frames: int | None = None):
+def main(
+    config_name: str,
+    max_frames: int | None = None,
+    repo_id: str | None = None,
+    assets_base_dir: str = "./assets",
+    asset_id: str | None = None,
+    batch_size: int | None = None,
+    num_workers: int = 8,
+    output_dir: str | None = None,
+    sample_ratio: float = 1.0,
+    shuffle: bool = False,
+    seed: int = 0,
+):
+    if not 0 < sample_ratio <= 1:
+        raise ValueError(f"sample_ratio must be in (0, 1], got {sample_ratio}.")
+
     config = _config.get_config(config_name)
+    if repo_id is not None:
+        config = dataclasses.replace(config, data=dataclasses.replace(config.data, repo_id=repo_id))
+    if asset_id is not None:
+        assets = dataclasses.replace(config.data.assets, asset_id=asset_id)
+        config = dataclasses.replace(config, data=dataclasses.replace(config.data, assets=assets))
+    if assets_base_dir is not None:
+        config = dataclasses.replace(config, assets_base_dir=assets_base_dir)
+    if batch_size is not None:
+        config = dataclasses.replace(config, batch_size=batch_size)
+
     data_config = config.data.create(config.assets_dirs, config.model)
 
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
-            data_config, config.model.action_horizon, config.batch_size, max_frames
+            data_config, config.model.action_horizon, config.batch_size, max_frames, sample_ratio
         )
     else:
         data_loader, num_batches = create_torch_dataloader(
-            data_config, config.batch_size, config.model, max_frames
+            data_config,
+            config.batch_size,
+            config.model,
+            max_frames,
+            num_workers,
+            sample_ratio,
+            shuffle,
+            seed,
         )
 
     keys = ["state", "actions", "coarse_actions"]
     stats = {key: normalize.RunningStats() for key in keys}
 
-    sample_ratio = 0.1
-    max_batches = int(num_batches * sample_ratio)
-
     data_iter = iter(data_loader)
-    pbar = tqdm.tqdm(total=max_batches, desc="Computing stats")
+    pbar = tqdm.tqdm(total=num_batches, desc="Computing stats")
     valid_batches = 0
-    while valid_batches < max_batches:
+    while valid_batches < num_batches:
         try:
             batch = next(data_iter)
         except StopIteration:
@@ -118,7 +155,7 @@ def main(config_name: str, max_frames: int | None = None):
             continue
 
         for key in keys:
-            values = np.asarray(batch[key][0])
+            values = np.asarray(batch[key])
             stats[key].update(values.reshape(-1, values.shape[-1]))
 
         pbar.update(1)
@@ -128,7 +165,12 @@ def main(config_name: str, max_frames: int | None = None):
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = "./"
+    if output_dir is not None:
+        output_path = pathlib.Path(output_dir)
+    else:
+        if data_config.asset_id is None:
+            raise ValueError("Cannot infer output_dir because data_config.asset_id is None.")
+        output_path = pathlib.Path(config.assets_dirs) / data_config.asset_id
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 
