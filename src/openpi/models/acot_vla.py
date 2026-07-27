@@ -791,6 +791,104 @@ class ACOT_VLA(_model.BaseModel):
             action_diff_expert = u_expert_t - v_expert_t
             return jnp.mean(jnp.square(action_diff_expert))
 
+    def compute_loss_with_randoms(
+        self,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        coarse_actions: _model.CoarseActions,
+        *,
+        timestep: at.Float[at.Array, " b"],
+        coarse_action_noise: at.Float[at.Array, "b ch ad"],
+        expert_action_noise: at.Float[at.Array, "b ah ad"],
+        train: bool = False,
+        preprocess_rng: at.KeyArrayLike | None = None,
+    ) -> dict[str, at.Array]:
+        """Debug-only ACoT loss path with externally supplied flow randoms.
+
+        This keeps the production training path untouched while allowing
+        JAX/Torch fixed-batch parity checks with identical timestep/noise.
+        """
+
+        if train and preprocess_rng is None:
+            raise ValueError("preprocess_rng is required when train=True.")
+        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+
+        time = timestep
+        time_expanded = time[..., None, None]
+
+        x_ref_t = time_expanded * coarse_action_noise + (1.0 - time_expanded) * coarse_actions
+        u_ref_t = coarse_action_noise - coarse_actions
+
+        x_expert_t = time_expanded * expert_action_noise + (1.0 - time_expanded) * actions
+        u_expert_t = expert_action_noise - actions
+
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions_prefix = jnp.cumsum(prefix_mask, axis=1) - 1
+        _, kv_cache = self.PaliGemma.llm([prefix_tokens, None, None], mask=prefix_attn_mask, positions=positions_prefix)
+
+        if self.adopt_explicit_action_reasoner:
+            suffix_ref_action_tokens, suffix_ref_action_mask, suffix_ref_action_ar_mask, adarms_ref_action_cond = (
+                self.embed_suffix(observation, x_ref_t, time, suf_type="reasoner")
+            )
+            input_mask = jnp.concatenate([prefix_mask, suffix_ref_action_mask], axis=1)
+            ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ref_action_ar_mask], axis=0)
+            attn_mask = make_attn_mask(input_mask, ar_mask)
+            positions = jnp.cumsum(input_mask, axis=1) - 1
+            (_, suffix_ref_action_out, _), _ = self.PaliGemma.llm(
+                [prefix_tokens, suffix_ref_action_tokens, None],
+                mask=attn_mask,
+                positions=positions,
+                adarms_cond=[None, adarms_ref_action_cond, None],
+            )
+            explicit_action_reason = coarse_actions
+            v_ref_t = self.coarse_action_out_proj(suffix_ref_action_out[:, -self.coarse_action_horizon :])
+            coarse_loss = jnp.mean(jnp.square(u_ref_t - v_ref_t))
+        else:
+            explicit_action_reason = None
+            v_ref_t = jnp.zeros_like(coarse_actions)
+            coarse_loss = jnp.asarray(0.0, dtype=actions.dtype)
+
+        if self.adopt_implicit_action_reasoner:
+            K_all, V_all = kv_cache
+            K_rearranged = einops.rearrange(K_all, "L B T 1 D -> B L T D")
+            V_rearranged = einops.rearrange(V_all, "L B T 1 D -> B L T D")
+            implicit_action_reason = self.implicit_action_reasoner(K_rearranged, V_rearranged)
+        else:
+            implicit_action_reason = None
+
+        suffix_expert_tokens, suffix_expert_mask, suffix_expert_ar_mask, adarms_expert_cond = self.embed_suffix(
+            observation,
+            x_expert_t,
+            time,
+            explicit_action_reason=explicit_action_reason,
+            implicit_action_reason=implicit_action_reason,
+            suf_type="expert",
+        )
+        input_mask = jnp.concatenate([prefix_mask, suffix_expert_mask], axis=1)
+        ar_mask = jnp.concatenate([prefix_ar_mask, suffix_expert_ar_mask], axis=0)
+        attn_mask = make_attn_mask(input_mask, ar_mask)
+        positions = jnp.cumsum(input_mask, axis=1) - 1
+        (_, _, suffix_expert_out), _ = self.PaliGemma.llm(
+            [prefix_tokens, None, suffix_expert_tokens],
+            mask=attn_mask,
+            positions=positions,
+            adarms_cond=[None, None, adarms_expert_cond],
+        )
+        v_expert_t = self.action_out_proj(suffix_expert_out[:, -self.action_horizon :])
+        action_loss = jnp.mean(jnp.square(u_expert_t - v_expert_t))
+
+        return {
+            "total_loss": coarse_loss + action_loss,
+            "coarse_loss": coarse_loss,
+            "action_loss": action_loss,
+            "timestep_mean": jnp.mean(time),
+            "target_ref_velocity": u_ref_t,
+            "predicted_ref_velocity": v_ref_t,
+            "target_expert_velocity": u_expert_t,
+            "predicted_expert_velocity": v_expert_t,
+        }
+
     @override
     def sample_actions(
         self,

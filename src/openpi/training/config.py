@@ -23,7 +23,6 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.agilex_policy as agilex_policy
-import openpi.policies.g01_policy as g01_policy
 import openpi.policies.go1_policy as go1_policy
 import openpi.policies.go2_policy as go2_policy
 import openpi.policies.vlabench_policy as vlabench_policy
@@ -99,6 +98,10 @@ class DataConfig:
     prompt_from_hl_instruction: bool = False
 
     dataloader_sampler: str | None = ''
+
+    # Optional LeRobot task_index filter. This is useful for debugging a single LIBERO task without
+    # materializing a copied dataset.
+    task_indexes: Sequence[int] | None = None
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -497,7 +500,7 @@ class LeRobotACOTVLABenchDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
         )
-        object.__setattr__(ret_config, "joint_action_shifts", self.joint_action_shifts)
+        object.__setattr__(ret_config, 'joint_action_shifts', self.joint_action_shifts)
         return ret_config
 
 
@@ -570,74 +573,6 @@ class LerobotACOTGo1DataConfig(DataConfigFactory):
         model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
 
         ret_config =  dataclasses.replace(
-            self.create_base_config(assets_dirs, model_config),
-            repack_transforms=self.repack_transforms,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-            action_sequence_keys=self.action_sequence_keys,
-        )
-        object.__setattr__(ret_config, 'joint_action_shifts', self.joint_action_shifts)
-        return ret_config
-
-
-@dataclasses.dataclass(frozen=True)
-class LerobotACOTG01DataConfig(DataConfigFactory):
-    """Configuration for AgiBot G01 datasets and real-robot inference."""
-
-    extra_delta_transform: Sequence[bool] = (True, True)
-    joint_action_shifts: Sequence[int] = (1, 1)
-
-    # If provided, will be injected into the input data if the "prompt" key is not present.
-    default_prompt: str | None = "Fixed-point Non-generalized Door Opening"
-
-    repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
-        default=_transforms.Group(
-            inputs=[
-                _transforms.RepackTransform(
-                    {
-                        "images": {
-                            "top_head": "observation.images.top_head",
-                            "hand_left": "observation.images.hand_left",
-                            "hand_right": "observation.images.hand_right",
-                        },
-                        "state": "observation.state",
-                        "actions": "action",
-                        "prompt": "prompt",
-                    }
-                )
-            ]
-        )
-    )
-
-    action_sequence_keys: Sequence[str] = ("action",)
-
-    delta_action_mask: Sequence[bool] = dataclasses.field(
-        default_factory=lambda: _transforms.make_bool_mask(14, -18)
-    )
-
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        data_transforms = _transforms.Group(
-            inputs=[
-                g01_policy.G01ACOTInputs(
-                    action_dim=model_config.action_dim,
-                    acot_action_generation=(
-                        (model_config.coarse_action_horizon, model_config.action_horizon),
-                        self.joint_action_shifts,
-                    ),
-                )
-            ],
-            outputs=[g01_policy.G01ACOTOutputs()],
-        )
-
-        data_transforms = data_transforms.push(
-            inputs=[_transforms.ACOTDeltaActions(self.delta_action_mask, self.extra_delta_transform)],
-            outputs=[_transforms.ACOTAbsoluteActions(self.delta_action_mask, self.extra_delta_transform)],
-        )
-
-        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
-
-        ret_config = dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=self.repack_transforms,
             data_transforms=data_transforms,
@@ -774,6 +709,12 @@ class LeRobotACOTLiberoDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
         )
+        task_indexes = os.getenv("LIBERO_TASK_INDEXES")
+        if task_indexes:
+            ret_config = dataclasses.replace(
+                ret_config,
+                task_indexes=tuple(int(item.strip()) for item in task_indexes.split(",") if item.strip()),
+            )
         object.__setattr__(ret_config, 'joint_action_shifts', self.joint_action_shifts)
         return ret_config
 
@@ -1259,8 +1200,14 @@ class TrainConfig:
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
+    # How often (in steps) to run fixed eval batches. Set to 0 to disable.
+    eval_interval: int = 0
+    # Number of fixed eval batches to keep for periodic eval.
+    eval_batches: int = 0
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
+    # If true, save a final checkpoint at the last train step.
+    save_final_checkpoint: bool = True
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
 
@@ -1280,6 +1227,10 @@ class TrainConfig:
     # eg. if total device is 4 and fsdp devices is 2; then the model will shard to 2 devices and run
     # data parallel between 2 groups of devices.
     fsdp_devices: int = 1
+
+    # Optional fixed-batch ACoT probes.
+    fixed_loss_fixture: str | None = None
+    fixed_loss_interval: int = 0
 
     @property
     def assets_dirs(self) -> pathlib.Path:
@@ -1654,7 +1605,7 @@ _CONFIGS = [
         name="acot_libero_action_cot_explicit_implicit_co_fusion",
         model=acot_vla.ACOTConfig(coarse_action_horizon=15, action_horizon=10, pi05=True, discrete_state_input=False, coarse_action_expert_variant = "gemma_300m", action_expert_variant = "gemma_300m", adopt_explicit_action_reasoner=True, adopt_implicit_action_reasoner=True, downsample_based_implicit_extractor=True),
         data=LeRobotACOTLiberoDataConfig(
-            repo_id="/mnt/public/zhonglinqing/data/datasets/libero_dataset/",
+            repo_id=os.getenv("LIBERO_LEROBOT_ROOT", "./libero"),
             base_config=DataConfig(prompt_from_task=True),
             extra_delta_transform=(False, False),
             joint_action_shifts=(2, 1)
@@ -1668,7 +1619,10 @@ _CONFIGS = [
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
         weight_loader=weight_loaders.ACOTCheckpointWeightLoader(
-            "/mnt/public/zhonglinqing/pkgs/pi05_model/params"
+            os.getenv(
+                "ACOT_PI05_PARAMS_PATH",
+                "gs://openpi-assets-preview/checkpoints/pi05_may21_280k_v1/params",
+            )
         ),
         num_train_steps=51_000,
         save_interval=10000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1000,
@@ -1740,50 +1694,6 @@ _CONFIGS = [
         num_workers=48 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         batch_size=128 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
         freeze_filter=acot_vla.ACOTConfig().get_freeze_filter(freeze_vision = False, freeze_llm = True, freeze_dual_ae=[False, False]),
-    ),
-    # agibot g01 configs
-    TrainConfig(
-        name="acot_g01_task_5093",
-        model=acot_vla.ACOTConfig(
-            action_dim=32,
-            coarse_action_horizon=16,
-            action_horizon=16,
-            pi05=True,
-            discrete_state_input=True,
-            action_expert_variant="gemma_300m",
-            adopt_explicit_action_reasoner=True,
-            adopt_implicit_action_reasoner=True,
-            downsample_based_implicit_extractor=True,
-        ),
-        data=LerobotACOTG01DataConfig(
-            repo_id=os.getenv(
-                "G01_TASK_5093_DATASET",
-                "/Users/johnice/Desktop/nw/Isaac-GR00T/datasets/task_5093",
-            ),
-            assets=AssetsConfig(asset_id=os.getenv("G01_TASK_5093_ASSET_ID", "g01/task_5093")),
-            default_prompt="Fixed-point Non-generalized Door Opening",
-            base_config=DataConfig(prompt_from_task=True),
-            extra_delta_transform=(True, True),
-            joint_action_shifts=(1, 1),
-        ),
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=10_000,
-            peak_lr=5e-5,
-            decay_steps=1_000_000,
-            decay_lr=5e-5,
-        ),
-        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
-        num_train_steps=50_000,
-        save_interval=5000 if not os.getenv("DEBUG_MODE", default=False) == "true" else 200,
-        num_workers=24 if not os.getenv("DEBUG_MODE", default=False) == "true" else 1,
-        batch_size=128 if not os.getenv("DEBUG_MODE", default=False) == "true" else 16,
-        policy_metadata={
-            "robot_type": "g01",
-            "action_horizon": 16,
-            "action_dim": 16,
-            "prompt": "Fixed-point Non-generalized Door Opening",
-        },
     ),
     # go1 configs
     TrainConfig(

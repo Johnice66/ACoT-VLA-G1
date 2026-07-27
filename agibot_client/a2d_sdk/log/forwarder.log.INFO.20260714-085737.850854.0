@@ -1,0 +1,21 @@
+Log file created at: 2026/07/14 08:57:37
+Running on machine: nw102
+Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+I0714 08:57:37.437799 850854 dylog_impl.cpp:607] [DYLOG] set dylog default level from env = FATAL
+W0714 08:57:37.437825 850854 dylog_impl.cpp:617] [DYLOG] can't find available soc record file with path : /proc/device-tree/model, use s1
+I0714 08:57:37.437826 850854 dylog_impl.cpp:626] [DYLOG] soc num : s1
+I0714 08:57:37.437829 850854 dylog_impl.cpp:631] [DYLOG] can't read scene_mode, use sud
+W0714 08:57:37.437830 850854 dylog_impl.cpp:693] [DYLOG] can't find available json config file with path : /home/agi/app/conf/scene_server/dylog_sud_default.json, use default.
+I0714 08:57:37.437860 850854 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/cosine_internal
+I0714 08:57:37.444046 850854 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/aorta
+I0714 08:57:37.445930 850854 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/forwarder
+I0714 09:02:37.438192 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0714 09:02:37.441718 850857 dylog_impl.cpp:251] [DYLOG] register dsd_name : dyblog/log_frequency
+I0714 09:07:37.441962 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0714 09:12:37.442224 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0714 09:17:37.442418 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0714 09:22:37.442653 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0714 09:27:37.442900 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0714 09:32:37.443109 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0714 09:37:37.443369 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0714 09:42:37.443481 850857 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 

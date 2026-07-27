@@ -54,6 +54,57 @@ python examples/libero/main.py
 MUJOCO_GL=glx python examples/libero/main.py
 ```
 
+### Ascend/aarch64 client environment
+
+The default `examples/libero/requirements.txt` pins CUDA 11.3 PyTorch wheels for
+x86_64 and will not resolve on aarch64. For an Ascend container, run the LIBERO
+simulation as a websocket client and keep the Torch/NPU policy server in the main
+project environment.
+
+```bash
+apt-get update && apt-get install -y \
+  make \
+  g++ \
+  clang \
+  libosmesa6-dev \
+  libgl1-mesa-glx \
+  libglew-dev \
+  libglfw3-dev \
+  libgles2-mesa-dev \
+  libglib2.0-0 \
+  libsm6 \
+  libxrender1 \
+  libxext6
+
+uv venv --python 3.8 examples/libero/.venv
+source examples/libero/.venv/bin/activate
+uv pip sync examples/libero/requirements-aarch64.txt
+uv pip install -e packages/openpi-client --no-deps
+uv pip install -e third_party/libero --no-deps
+export PYTHONPATH=$PYTHONPATH:$PWD/third_party/libero
+
+mkdir -p /tmp/libero
+cat > /tmp/libero/config.yaml <<EOF
+benchmark_root: $PWD/third_party/libero/libero/libero
+bddl_files: $PWD/third_party/libero/libero/libero/bddl_files
+init_states: $PWD/third_party/libero/libero/libero/init_files
+datasets: $PWD/third_party/libero/libero/datasets
+assets: $PWD/third_party/libero/libero/libero/assets
+EOF
+export LIBERO_CONFIG_PATH=/tmp/libero
+
+MUJOCO_GL=egl examples/libero/.venv/bin/python examples/libero/main.py \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --task-suite-name libero_spatial \
+  --task-start 0 \
+  --task-count 1 \
+  --num-trials-per-task 1 \
+  --replan-steps 1 \
+  --server-wait-timeout-s 120 \
+  --exp-name torch_npu_smoke
+```
+
 Terminal window 2:
 
 ```bash

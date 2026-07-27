@@ -1,0 +1,17 @@
+Log file created at: 2026/06/23 15:55:21
+Running on machine: nw102
+Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu threadid file:line] msg
+I0623 15:55:21.324970 601827 dylog_impl.cpp:607] [DYLOG] set dylog default level from env = FATAL
+W0623 15:55:21.324999 601827 dylog_impl.cpp:617] [DYLOG] can't find available soc record file with path : /proc/device-tree/model, use s1
+I0623 15:55:21.325001 601827 dylog_impl.cpp:626] [DYLOG] soc num : s1
+I0623 15:55:21.325002 601827 dylog_impl.cpp:631] [DYLOG] can't read scene_mode, use sud
+W0623 15:55:21.325006 601827 dylog_impl.cpp:693] [DYLOG] can't find available json config file with path : /home/agi/app/conf/scene_server/dylog_sud_default.json, use default.
+I0623 15:55:21.325042 601827 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/cosine_internal
+I0623 15:55:21.328668 601827 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/aorta
+I0623 15:55:21.332392 601827 dylog_impl.cpp:251] [DYLOG] register dsd_name : dylog/forwarder/forwarder
+I0623 16:00:21.325371 601830 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 16:00:21.329258 601830 dylog_impl.cpp:251] [DYLOG] register dsd_name : dyblog/log_frequency
+I0623 16:05:21.329485 601830 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 16:10:21.329604 601830 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 16:15:21.329704 601830 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
+I0623 16:20:21.329816 601830 dylog_impl.cpp:372] [DYLOG] log frequency: forwarder:0 aorta:0 cosine_internal:0 
