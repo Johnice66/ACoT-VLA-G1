@@ -6,7 +6,10 @@ dataset/
 wandb/
 observation_samples/
 *.zip
+*.tar.gz
 libero/
+agibot_client/gdk_server_installer/*.whl
+agibot_client/gdk_server_installer/*.tar.gz
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
