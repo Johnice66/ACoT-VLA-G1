@@ -34,6 +34,10 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
 import openpi.transforms as _transforms
 
+import openpi.policies.agilex_policy as agilex_policy
+import openpi.policies.g01_policy as g01_policy
+import openpi.policies.go1_policy as go1_policy
+
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
@@ -502,6 +506,118 @@ class LeRobotACOTVLABenchDataConfig(DataConfigFactory):
         )
         object.__setattr__(ret_config, 'joint_action_shifts', self.joint_action_shifts)
         return ret_config
+
+
+@dataclasses.dataclass(frozen=True)
+class LerobotACOTG01DataConfig(DataConfigFactory):
+    """AgiBot G01 数据与真实机器人推理配置。"""
+
+    # coarse actions 和 fine actions 均使用相对关节动作
+    extra_delta_transform: Sequence[bool] = (True, True)
+
+    # 原始动作序列不跳帧
+    joint_action_shifts: Sequence[int] = (1, 1)
+
+    default_prompt: str | None = (
+        "Fixed-point Non-generalized Door Opening"
+    )
+
+    # 训练数据字段映射
+    repack_transforms: tyro.conf.Suppress[_transforms.Group] = (
+        dataclasses.field(
+            default=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "top_head":
+                                    "observation.images.top_head",
+                                "hand_left":
+                                    "observation.images.hand_left",
+                                "hand_right":
+                                    "observation.images.hand_right",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                            "prompt": "prompt",
+                        }
+                    )
+                ]
+            )
+        )
+    )
+
+    action_sequence_keys: Sequence[str] = ("action",)
+
+    # 前14维是左右手臂关节，需要转为相对动作；
+    # 后2维是夹爪绝对位置；
+    # 剩余16维是模型内部padding。
+    delta_action_mask: Sequence[bool] = dataclasses.field(
+        default_factory=lambda:
+            _transforms.make_bool_mask(14, -18)
+    )
+
+    @override
+    def create(
+        self,
+        assets_dirs: pathlib.Path,
+        model_config: _model.BaseModelConfig,
+    ) -> DataConfig:
+        data_transforms = _transforms.Group(
+            inputs=[
+                g01_policy.G01ACOTInputs(
+                    action_dim=model_config.action_dim,
+                    acot_action_generation=(
+                        (
+                            model_config.coarse_action_horizon,
+                            model_config.action_horizon,
+                        ),
+                        self.joint_action_shifts,
+                    ),
+                )
+            ],
+            outputs=[
+                g01_policy.G01ACOTOutputs()
+            ],
+        )
+
+        data_transforms = data_transforms.push(
+            inputs=[
+                _transforms.ACOTDeltaActions(
+                    self.delta_action_mask,
+                    self.extra_delta_transform,
+                )
+            ],
+            outputs=[
+                _transforms.ACOTAbsoluteActions(
+                    self.delta_action_mask,
+                    self.extra_delta_transform,
+                )
+            ],
+        )
+
+        model_transforms = ModelTransformFactory(
+            default_prompt=self.default_prompt
+        )(model_config)
+
+        result = dataclasses.replace(
+            self.create_base_config(
+                assets_dirs,
+                model_config,
+            ),
+            repack_transforms=self.repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
+        object.__setattr__(
+            result,
+            "joint_action_shifts",
+            self.joint_action_shifts,
+        )
+
+        return result
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1259,6 +1375,60 @@ class TrainConfig:
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+    # AgiBot G01 real robot config
+    TrainConfig(
+        name="acot_g01_task_5093",
+
+        model=acot_vla.ACOTConfig(
+            action_dim=32,
+            coarse_action_horizon=16,
+            action_horizon=16,
+            pi05=True,
+            discrete_state_input=True,
+            action_expert_variant="gemma_300m",
+            adopt_explicit_action_reasoner=True,
+            adopt_implicit_action_reasoner=True,
+            downsample_based_implicit_extractor=True,
+        ),
+
+        data=LerobotACOTG01DataConfig(
+            repo_id=os.getenv(
+                "G01_TASK_5093_DATASET",
+                "./dataset/task_5093",
+            ),
+
+            assets=AssetsConfig(
+                asset_id=os.getenv(
+                    "G01_TASK_5093_ASSET_ID",
+                    "g01/task_5093",
+                )
+            ),
+
+            default_prompt=(
+                "Fixed-point Non-generalized Door Opening"
+            ),
+
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+
+            extra_delta_transform=(True, True),
+            joint_action_shifts=(1, 1),
+        ),
+
+        num_train_steps=50_000,
+        save_interval=5_000,
+        num_workers=24,
+        batch_size=128,
+
+        policy_metadata={
+            "robot_type": "g01",
+            "action_horizon": 16,
+            "action_dim": 16,
+            "prompt":
+                "Fixed-point Non-generalized Door Opening",
+        },
+    ),
     #
     # Inference Aloha configs.
     #
